@@ -4,6 +4,8 @@ using System.Linq;
 using System.IO;
 using System.Drawing.Imaging;
 using System.Drawing;
+using System.ComponentModel.Design;
+using EscapeFromTheWoods.Objects;
 
 namespace EscapeFromTheWoods
 {
@@ -38,28 +40,33 @@ namespace EscapeFromTheWoods
             monkeys.Add(m);
             trees[treeNr].hasMonkey = true;
         }
-        public void Escape()
+        public void Escape(Grid grid, decimal radius)
         {
             List<List<Tree>> routes = new List<List<Tree>>();
             foreach (Monkey m in monkeys)
             {
-                routes.Add(EscapeMonkey(m));
-            }                
-           WriteEscaperoutesToBitmap(routes);           
+                routes.Add(EscapeMonkey(m, grid, radius));
+            }
+            WriteEscaperoutesToBitmap(routes);
         }
-        private void writeRouteToDB(Monkey monkey,List<Tree> route)
+
+
+
+
+        public void writeRouteToDB(Monkey monkey, List<Tree> route)
         {
             Console.ForegroundColor = ConsoleColor.DarkGreen;
             Console.WriteLine($"{woodID}:write db routes {woodID},{monkey.name} start");
             List<DBMonkeyRecord> records = new List<DBMonkeyRecord>();
             for (int j = 0; j < route.Count; j++)
             {
-                records.Add(new DBMonkeyRecord(monkey.monkeyID, monkey.name, woodID,j, route[j].treeID, route[j].x, route[j].y));
+                records.Add(new DBMonkeyRecord(monkey.monkeyID, monkey.name, woodID, j, route[j].treeID, route[j].x, route[j].y));
             }
             db.WriteMonkeyRecords(records);
             Console.ForegroundColor = ConsoleColor.DarkGreen;
             Console.WriteLine($"{woodID}:write db routes {woodID},{monkey.name} end");
-        }       
+        }
+
         public void WriteEscaperoutesToBitmap(List<List<Tree>> routes)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -93,65 +100,68 @@ namespace EscapeFromTheWoods
             bm.Save(Path.Combine(path, woodID.ToString() + "_escapeRoutes.jpg"), ImageFormat.Jpeg);
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine($"{woodID}:write bitmap routes {woodID} end");
-        }        
-        public void WriteWoodToDB()
-        {
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"{woodID}:write db wood {woodID} start");
-            List<DBWoodRecord> records = new List<DBWoodRecord>();
-            foreach(Tree t in trees)
-            {
-                records.Add(new DBWoodRecord(woodID, t.treeID,t.x,t.y));
-            }
-            db.WriteWoodRecords(records);
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"{woodID}:write db wood {woodID} end");
         }
-        public List<Tree> EscapeMonkey(Monkey monkey)
+        
+
+        public List<Tree> EscapeMonkey(Monkey monkey, Grid grid, decimal radius)
         {
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine($"{woodID}:start {woodID},{monkey.name}");
-            Dictionary<int, bool> visited = new Dictionary<int, bool>();
-            trees.ForEach(x => visited.Add(x.treeID, false));
-            List<Tree> route = new List<Tree>() { monkey.tree };
+
+            var visited = new HashSet<int>(trees.Select(t => t.treeID));
+            var route = new HashSet<Tree> { monkey.tree };
+
             do
             {
-                visited[monkey.tree.treeID] = true;
-                SortedList<double, List<Tree>> distanceToMonkey = new SortedList<double, List<Tree>>();
+                visited.Add(monkey.tree.treeID);
+                var distanceToMonkey = new SortedDictionary<double, List<Tree>>();
 
-                //zoek dichtste boom die nog niet is bezocht            
-                foreach (Tree t in trees)
+                foreach (Tree t in grid.GetTreesInGrid(trees, monkey.tree, radius, visited))
                 {
-                    if ((!visited[t.treeID]) && (!t.hasMonkey))
+                    double d = CalculateDistance(t, monkey.tree);
+                    if (!distanceToMonkey.ContainsKey(d))
                     {
-                        double d = Math.Sqrt(Math.Pow(t.x - monkey.tree.x, 2) + Math.Pow(t.y - monkey.tree.y, 2));
-                        if (distanceToMonkey.ContainsKey(d)) distanceToMonkey[d].Add(t);
-                        else distanceToMonkey.Add(d, new List<Tree>() { t });
+                        distanceToMonkey[d] = new List<Tree>();
                     }
+                    distanceToMonkey[d].Add(t);
                 }
-                //distance to border            
-                //noord oost zuid west
-                double distanceToBorder = (new List<double>(){ map.ymax - monkey.tree.y,
-                map.xmax - monkey.tree.x,monkey.tree.y-map.ymin,monkey.tree.x-map.xmin }).Min();
-                if (distanceToMonkey.Count == 0)
+
+                double distanceToBorder = (new List<double> { map.ymax - monkey.tree.y,
+            map.xmax - monkey.tree.x, monkey.tree.y - map.ymin, monkey.tree.x - map.xmin }).Min();
+
+                if (distanceToMonkey.Count == 0 || distanceToBorder < distanceToMonkey.First().Key)
                 {
-                    writeRouteToDB(monkey, route);
+                    writeRouteToDB(monkey, route.ToList());
                     Console.ForegroundColor = ConsoleColor.White;
                     Console.WriteLine($"{woodID}:end {woodID},{monkey.name}");
-                    return route;
-                }
-                if (distanceToBorder < distanceToMonkey.First().Key)
-                {
-                    writeRouteToDB(monkey, route);
-                    Console.ForegroundColor = ConsoleColor.White;
-                    Console.WriteLine($"{woodID}:end {woodID},{monkey.name}");
-                    return route;
+                    return route.ToList();
                 }
 
                 route.Add(distanceToMonkey.First().Value.First());
                 monkey.tree = distanceToMonkey.First().Value.First();
-            }
-            while (true);
+            } while (true);
         }
-    }
+
+        private double CalculateDistance(Tree tree1, Tree tree2)
+        {
+            return Math.Sqrt(Math.Pow(tree1.x - tree2.x, 2) + Math.Pow(tree1.y - tree2.y, 2));
+        }
+
+        public List<Tree> GetTreesInBoundingBox(Tree center, decimal radius)
+            {
+                List<Tree> result = new List<Tree>();
+                foreach (Tree t in trees)
+                {
+                    // Controleer of de boom binnen de bounding box valt
+                    if (t.x >= center.x - radius && t.x <= center.x + radius &&
+                        t.y >= center.y - radius && t.y <= center.y + radius)
+                    {
+                        result.Add(t);
+
+                    }
+                }
+
+                return result;
+            }
+    } 
 }
